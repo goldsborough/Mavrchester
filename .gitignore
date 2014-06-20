@@ -1,0 +1,15 @@
+#Intel hex files
+
+*.hex
+
+# Executable files
+
+*.elf
+
+# Object files
+
+*.o
+
+# Folders
+
+Documents
