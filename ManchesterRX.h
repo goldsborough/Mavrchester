@@ -19,6 +19,8 @@
 #define HIGH 0b0011
 #define LOW  0b1100
 
+#define CONNECTION_TIME 77
+
 #define BUFFER_SIZE 128
 
 struct Queue

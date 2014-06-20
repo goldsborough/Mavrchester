@@ -18,47 +18,37 @@ volatile uint8_t samplesReady = 0;
 
 volatile int8_t sampleCount = DATA_SAMPLES - 1;
 
-uint8_t receiving = 0;
-uint8_t data = 0;
+uint8_t receiving = 0, data = 0, connectionCount = 0;
 
 int main(void)
 {
-    //struct Queue q = {.size = 0};
-
-    //uint16_t chksm;
+    struct Queue q = {.size = 0};
+    
+    uint16_t chksm;
     
     initRX();
     
     startRX();
-    
-    for(;;)
-    {
-        if (receiving) SET_BIT(PORTB,LED);
-    }
-    
-    /*
-    
-    for (;;)
-    {
-        if (receiving && samplesReady && interpretSamples(getSamples()))
-        {
-            pushQ(&q,data);
-            
-            if (q.size == 14) break;
-        }
-    }
-    
-    stopRX();
-    
-    chksm = computeChecksum(q.data,12);
-    
-    CLEAR_BIT(PORTB,LED);
-    
-    if (chksm == ((q.data[12] << 8) | q.data[13])) SET_BIT(PORTB,LED);
-    
-    return 0;
-
-    */
+     
+     for (;;)
+     {
+         if (receiving && samplesReady && interpretSamples(getSamples()))
+         {
+                pushQ(&q,data);
+     
+                if (q.size == 14) break;
+         }
+     }
+     
+     stopRX();
+     
+     chksm = computeChecksum(q.data,12);
+     
+     CLEAR_BIT(PORTB,LED);
+     
+     if (chksm == ((q.data[12] << 8) | q.data[13])) SET_BIT(PORTB,LED);
+     
+     return 0;
     
 }
 
@@ -156,11 +146,23 @@ void initRX(void)
     /* Watch pin change on pin 3 */
     SET_BIT(PCMSK,PCINT3);
     
+    /* Enable Timer1 with clk/4096 prescaling. Timer1 is used for timing
+     out the connection pipeline. */
+    TCCR1 |= 0x0D;
+    
+    /* Enable the overflow interrupt for Timer1 */
+    SET_BIT(TIMSK,TOIE1);
+    
     /* Sample every 100 µs */
     OCR0A = SAMPLE_TIME;
 	
-    /* Enable the output compare interrupt */
+    /* Enable the output compare interrupt for Timer0 */
     SET_BIT(TIMSK,OCIE0A);
+    
+    /* We are not using the Clear Timer on Compare Match feature. The reason
+     is that it's not actually the ISR call that needs to be called regularly,
+     but the sampling, therefore we clear the timer after the sample and don't
+     let the timer be cleared automatically. */
     
     /* Turn on Timer0 with clk/8 prescaling, gives 1µs per cycle @8Mhz.
      Timer0 is used for sampling */
@@ -171,9 +173,16 @@ void startRX(void)
 {
     uint8_t preambleBit, lows = 0, highs = 0;
     
+    //SET_BIT(PORTB,LED);
+    
     /* Enable global interrupts */
 	asm("sei");
     
+    /* Reset */
+    TCNT0 = TCNT1 = 0;
+    
+    /* Enable while waiting for the preamble. Is turned false when the connection
+     times out. */
     receiving = 1;
     
     /* Going to record individual bits now */
@@ -182,6 +191,9 @@ void startRX(void)
     /* receiving becomes false if the connection times out, so this will not go on forever */
     while (receiving)
     {
+        /* I don't know why, but if I don't have this condition in here it will ignore,
+           the receiving variable. I guess there's some rjump in the assembly code or something */
+        
         if (samplesReady)
         {
             /* Grab bit */
@@ -190,7 +202,7 @@ void startRX(void)
             sampleCount = 3;
             
             /* The preamble consists of 6 low bits (10) and 2 high bits (01), everything
-               else or any other order than that resets the counter values to 0 */
+             else or any other order than that resets the counter values to 0 */
             
             if (preambleBit == LOW)
             {
@@ -234,9 +246,14 @@ void startRX(void)
 
 void stopRX(void)
 {
-    asm("cli");
-    
+    /* Stop the wait for the preamble if it's still running,
+     else stop waiting for samples in main */
     receiving = 0;
+    
+    /* Disable sampling Timer/Counter */
+    CLEAR_BIT(TIMSK,OCIE0A);
+    
+    //CLEAR_BIT(PORTB,LED);
 }
 
 uint8_t interpretSamples(const uint32_t samps)
@@ -247,6 +264,7 @@ uint8_t interpretSamples(const uint32_t samps)
     
     for (; i >= 0; --i)
     {
+        /* Grab the current bit */
         bit = (samps >> (i*4)) & 0x0F;
         
         if (bit == HIGH) SET_BIT(data,i);
@@ -257,6 +275,16 @@ uint8_t interpretSamples(const uint32_t samps)
     }
     
     return 1;
+}
+
+ISR(TIMER1_OVF_vect)
+{
+    if (++connectionCount >= CONNECTION_TIME)
+    {
+        connectionCount = 0;
+        
+        stopRX();
+    }
 }
 
 ISR(PCINT0_vect)
@@ -271,20 +299,20 @@ ISR(TIMER0_COMPA_vect)
     /* If the current sample reads high, set the current bit in the samples */
     if (IS_SET(RX_PORT,RX_PIN))
     {
-        /* Have to set to 1 here, only works this way. I don't know why. */
-		TCNT0 = 1;
+        /* Reset timer now, after sampling */
+        TCNT0 = 1;
         
-        /* Set the current bit in the samples */
         SET_BIT(samples,sampleCount);
-	}
+    }
     
     /* Else clear the current bit */
     else
-	{
-		TCNT0 = 1;
+    {
+        /* Reset timer now, after sampling */
+        TCNT0 = 1;
         
         CLEAR_BIT(samples,sampleCount);
-	}
+    }
     
     /* If the bit is finished, set the samplesReady flag */
     if (! sampleCount--)
