@@ -188,12 +188,12 @@ void startRX(void)
     /* Going to record individual bits now */
     sampleCount = 3;
     
+    /* Reset this. Otherwise all RX attempts will fail after the first one. Not sure why. */
+    samples = 0;
+    
     /* receiving becomes false if the connection times out, so this will not go on forever */
     while (receiving)
     {
-        /* I don't know why, but if I don't have this condition in here it will ignore,
-           the receiving variable. I guess there's some rjump in the assembly code or something */
-        
         if (samplesReady)
         {
             /* Grab bit */
